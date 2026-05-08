@@ -28,7 +28,13 @@ global scrollBumpLevel := 0
 global scrollBumpTicks := 0
 global scrollBumpTicksPerLevel := 3
 global scrollBumpLastRelease := 0
-global scrollBumpRestoreWindowMs := 5000
+global scrollBumpRestoreWindowMs := 3000
+
+; Most-recently-pressed scroll button still held — drives which direction
+; the active HoldToScroll loop is sending. Lets the user chord XB1/XB2:
+; press XB1, then XB2 (still holding XB1) → switches to up; release XB2
+; (XB1 still held) → falls back to down. Empty string when idle.
+global activeScrollButton := ""
 
 ; Re-evaluate the active profile periodically. 500ms is fast enough that
 ; alt-tabbing into a game picks up the new remaps before the first click.
@@ -58,9 +64,12 @@ ProfileForExe(exe) {
 
 #HotIf currentProfile = "desktop"
 
-; Side buttons: tap scrolls once, hold scrolls fast.
-$XButton1::HoldToScroll("XButton1", "WheelDown")
-$XButton2::HoldToScroll("XButton2", "WheelUp")
+; Side buttons: tap scrolls once, hold scrolls fast. Press-and-up are bound
+; separately so chord/swap behavior works (see ScrollPress / ScrollRelease).
+$XButton1::ScrollPress("XButton1", "WheelDown")
+$XButton2::ScrollPress("XButton2", "WheelUp")
+XButton1 up::ScrollRelease("XButton1")
+XButton2 up::ScrollRelease("XButton2")
 
 ; While a scroll button is held, ticking the wheel in the SAME direction
 ; bumps the speed level (RSI-friendly turbo). Opposite direction falls
@@ -168,16 +177,7 @@ HoldToScroll(button, direction) {
     ; Notepad++ silently drop sub-notch events. Whole notches it is.
     static mode := "smooth"
 
-    global scrollBumpLevel, scrollBumpTicks
-    global scrollBumpLastRelease, scrollBumpRestoreWindowMs
-
-    ; Restore prior level if any press lands within the restore window —
-    ; including switching to the opposite scroll button. Outside the window:
-    ; reset to L0.
-    if (A_TickCount - scrollBumpLastRelease) >= scrollBumpRestoreWindowMs {
-        scrollBumpLevel := 0
-        scrollBumpTicks := 0
-    }
+    global activeScrollButton, scrollBumpLevel, scrollBumpLastRelease
 
     ; Wrapped in try/catch: AHK can throw during secure-desktop transitions
     ; (UAC consent prompt), lock screen, or other states where input/window
@@ -187,10 +187,11 @@ HoldToScroll(button, direction) {
         ; Snapshot the foreground window — if it changes mid-loop (alt-tab,
         ; etc.), exit. Also catches the case where AHK's hook missed the
         ; release event during a focus change to an elevated window.
+        ; Loop also exits when activeScrollButton changes (chord swap).
         initialHwnd := WinGetID("A")
 
         if mode = "smooth" {
-            while IsHeld(button) && WinGetID("A") = initialHwnd {
+            while activeScrollButton = button && WinGetID("A") = initialHwnd {
                 if scrollBumpLevel < 3 {
                     intervalMs := 60 // (2 ** scrollBumpLevel)
                     chunkSize := 1
@@ -202,7 +203,7 @@ HoldToScroll(button, direction) {
                 Sleep(intervalMs)
             }
         } else {
-            while IsHeld(button) && WinGetID("A") = initialHwnd {
+            while activeScrollButton = button && WinGetID("A") = initialHwnd {
                 Send("{" direction " " (2 * (2 ** scrollBumpLevel)) "}")
                 Sleep(150)
             }
@@ -213,6 +214,43 @@ HoldToScroll(button, direction) {
     ; Record release for the restore-window check on next press. Don't reset
     ; level/ticks — they're remembered (across direction switches too).
     scrollBumpLastRelease := A_TickCount
+}
+
+ScrollPress(button, direction) {
+    global activeScrollButton, scrollBumpLevel, scrollBumpTicks
+    global scrollBumpLastRelease, scrollBumpRestoreWindowMs
+
+    ; Mid-session swap (other button still held) keeps the level. Only fresh
+    ; presses do the restore-window check; outside the window, reset to L0.
+    wasIdle := (activeScrollButton = "")
+    activeScrollButton := button
+
+    if wasIdle && (A_TickCount - scrollBumpLastRelease) >= scrollBumpRestoreWindowMs {
+        scrollBumpLevel := 0
+        scrollBumpTicks := 0
+    }
+
+    HoldToScroll(button, direction)
+}
+
+ScrollRelease(button) {
+    global activeScrollButton
+
+    ; Only the active button's release matters. If a non-active scroll button
+    ; is released (e.g., letting go of XB1 while XB2 is driving), the active
+    ; loop keeps running. Otherwise, fall back to the other if it's still
+    ; held; if neither is held, idle.
+    if activeScrollButton != button
+        return
+
+    otherButton := (button = "XButton1") ? "XButton2" : "XButton1"
+    if IsHeld(otherButton) {
+        otherDirection := (otherButton = "XButton1") ? "WheelDown" : "WheelUp"
+        activeScrollButton := otherButton
+        HoldToScroll(otherButton, otherDirection)
+    } else {
+        activeScrollButton := ""
+    }
 }
 
 ScrollBumpOrPassthrough(heldButton, wheelKey) {

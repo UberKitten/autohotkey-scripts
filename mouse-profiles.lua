@@ -38,7 +38,7 @@ local function levelParams(lvl)
 end
 
 local TICKS_PER_LEVEL = 3       -- wheel ticks needed to advance one level
-local RESTORE_WINDOW_SEC = 5.0  -- press within this window keeps the level
+local RESTORE_WINDOW_SEC = 3.0  -- press within this window keeps the level
                                 -- (any direction)
 
 -- Hammerspoon delivers scroll events we post back through this same eventtap.
@@ -46,8 +46,11 @@ local RESTORE_WINDOW_SEC = 5.0  -- press within this window keeps the level
 -- like real same-direction wheel ticks and get consumed by the bump counter.
 local SYNTHETIC_SCROLL_MARKER = 7331
 
--- runtime state
-local heldButton       = nil  -- 3, 4, or nil
+-- runtime state. heldButtons tracks every physically-pressed scroll button;
+-- heldButton is the one currently driving the scroll loop (most-recent press
+-- still held). Lets the user chord XB1/XB2 to swap directions on the fly.
+local heldButtons      = {}   -- {[3]=true, [4]=true}; missing/nil = released
+local heldButton       = nil  -- active button (3, 4, or nil)
 local heldDirection    = 0    -- -1 (down) or +1 (up), 0 when idle
 local bumpLevel        = 0
 local bumpTicks        = 0
@@ -96,20 +99,24 @@ local function scrollTick()
     scrollTimer = hs.timer.doAfter(interval, scrollTick)
 end
 
-local function startScroll(button, direction)
+local function directionFor(button)
+    return (button == BTN_DOWN) and -1 or 1
+end
+
+local function startScroll(button)
     if scrollTimer then
         scrollTimer:stop()
         scrollTimer = nil
     end
-    -- Restore prior level if any press lands within the restore window —
-    -- including switching to the opposite scroll button. Outside the
-    -- window: reset to L0.
-    if (hs.timer.secondsSinceEpoch() - lastReleaseTime) >= RESTORE_WINDOW_SEC then
+    -- Mid-session swap (other button was already held) keeps the level —
+    -- only fresh starts (idle) check the restore window.
+    if heldButton == nil
+            and (hs.timer.secondsSinceEpoch() - lastReleaseTime) >= RESTORE_WINDOW_SEC then
         bumpLevel = 0
         bumpTicks = 0
     end
     heldButton      = button
-    heldDirection   = direction
+    heldDirection   = directionFor(button)
     initialWindowId = focusedWindowId()
     scrollTick()
 end
@@ -121,12 +128,29 @@ M.buttonTap = hs.eventtap.new(
     function(e)
         local btn = e:getProperty(props.mouseEventButtonNumber)
         if btn ~= BTN_DOWN and btn ~= BTN_UP then return false end
-        local direction = (btn == BTN_DOWN) and -1 or 1
 
         if e:getType() == types.otherMouseDown then
-            startScroll(btn, direction)
-        elseif heldButton == btn then
-            stopScroll()
+            heldButtons[btn] = true
+            -- New press always becomes the active driver (preempting the
+            -- other if it was running).
+            if heldButton ~= btn then
+                startScroll(btn)
+            end
+        else  -- otherMouseUp
+            heldButtons[btn] = nil
+            if heldButton == btn then
+                -- Active button released — fall back to the other if it's
+                -- still held; otherwise stop.
+                local fallback = nil
+                for b, v in pairs(heldButtons) do
+                    if v then fallback = b; break end
+                end
+                if fallback then
+                    startScroll(fallback)
+                else
+                    stopScroll()
+                end
+            end
         end
         return true
     end
