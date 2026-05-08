@@ -156,9 +156,10 @@ M.buttonTap = hs.eventtap.new(
     end
 )
 
--- Wheel intercept: bump level if same direction as held button, passthrough
--- otherwise. Trackpad / continuous-scroll events always pass through (no
--- wheel detents to count).
+-- Wheel intercept: while a scroll button is held, same-direction wheel
+-- ticks bump the level up, opposite-direction bump it down (floored at
+-- L0). Wheel input is consumed in both cases. Trackpad / continuous-
+-- scroll events always pass through (no wheel detents to count).
 M.wheelTap = hs.eventtap.new(
     {types.scrollWheel},
     function(e)
@@ -173,11 +174,14 @@ M.wheelTap = hs.eventtap.new(
         local dy = e:getProperty(props.scrollWheelEventDeltaAxis1)
         if dy == 0 then return false end
         local wheelDirection = (dy > 0) and 1 or -1
-        if wheelDirection ~= heldDirection then return false end
+        local delta = (wheelDirection == heldDirection) and 1 or -1
+        bumpTicks = bumpTicks + delta
 
-        bumpTicks = bumpTicks + 1
         if bumpTicks >= TICKS_PER_LEVEL then
             bumpLevel = bumpLevel + 1
+            bumpTicks = 0
+        elseif bumpTicks <= -TICKS_PER_LEVEL then
+            if bumpLevel > 0 then bumpLevel = bumpLevel - 1 end
             bumpTicks = 0
         end
         return true  -- suppress: this tick was consumed by the bump counter

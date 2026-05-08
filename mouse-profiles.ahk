@@ -78,10 +78,11 @@ XButton1 up::ScrollRelease("XButton1")
 XButton2 up::ScrollRelease("XButton2")
 
 ; While a scroll button is held, ticking the wheel in the SAME direction
-; bumps the speed level (RSI-friendly turbo). Opposite direction falls
-; through to normal scroll behavior — no special handling.
-$WheelDown::ScrollBumpOrPassthrough("XButton1", "WheelDown")
-$WheelUp::ScrollBumpOrPassthrough("XButton2", "WheelUp")
+; bumps the speed level UP; ticking OPPOSITE bumps it down (floored at L0).
+; Wheel input is consumed in both cases. When idle, wheel passes through
+; as normal scroll.
+$WheelDown::ScrollBumpOrPassthrough("WheelDown")
+$WheelUp::ScrollBumpOrPassthrough("WheelUp")
 
 ; Tilt wheel → forward/back. Set tilt L/R to F20/F21 in the Synapse
 ; hardware profile; F20–F24 are unused function keys so nothing else
@@ -277,15 +278,28 @@ ScrollTick() {
     }
 }
 
-ScrollBumpOrPassthrough(heldButton, wheelKey) {
-    global scrollBumpLevel, scrollBumpTicks, scrollBumpTicksPerLevel
-    if IsHeld(heldButton) {
-        scrollBumpTicks++
-        if scrollBumpTicks >= scrollBumpTicksPerLevel {
-            scrollBumpLevel++
-            scrollBumpTicks := 0
-        }
+ScrollBumpOrPassthrough(wheelKey) {
+    global activeScrollButton, scrollBumpLevel, scrollBumpTicks, scrollBumpTicksPerLevel
+
+    ; Idle: passthrough as a normal wheel scroll.
+    if activeScrollButton = "" {
+        Send("{" wheelKey "}")
         return
     }
-    Send("{" wheelKey "}")
+
+    ; Active: signed tick counter. Same-direction +1, opposite -1. Reaching
+    ; ±ticksPerLevel triggers a level change (floored at L0). Wheel input
+    ; is suppressed regardless — it's been consumed by the bump system.
+    activeDirection := (activeScrollButton = "XButton1") ? "WheelDown" : "WheelUp"
+    delta := (wheelKey = activeDirection) ? 1 : -1
+    scrollBumpTicks += delta
+
+    if scrollBumpTicks >= scrollBumpTicksPerLevel {
+        scrollBumpLevel++
+        scrollBumpTicks := 0
+    } else if scrollBumpTicks <= -scrollBumpTicksPerLevel {
+        if scrollBumpLevel > 0
+            scrollBumpLevel--
+        scrollBumpTicks := 0
+    }
 }
