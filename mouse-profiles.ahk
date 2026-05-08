@@ -20,17 +20,15 @@ A_HotkeyInterval := 1000
 global currentProfile := "desktop"
 
 ; Scroll-bump level — bumped by wheel ticks while a scroll button is held.
-; Each level doubles chunkSize. ticksPerLevel sets how many wheel ticks it
-; takes to advance one level (deliberate ramp-up vs. one tick = liftoff).
+; ticksPerLevel sets how many wheel ticks it takes to advance one level
+; (deliberate ramp-up vs. one tick = liftoff). No max — gotta go fast.
 ; The level persists for restoreWindowMs after release, so quick re-presses
-; pick up where you left off instead of starting over at L0.
+; pick up where you left off, even if you switch directions.
 global scrollBumpLevel := 0
-global scrollBumpMax := 3
 global scrollBumpTicks := 0
 global scrollBumpTicksPerLevel := 3
 global scrollBumpLastRelease := 0
-global scrollBumpLastButton := ""
-global scrollBumpRestoreWindowMs := 2000
+global scrollBumpRestoreWindowMs := 5000
 
 ; Re-evaluate the active profile periodically. 500ms is fast enough that
 ; alt-tabbing into a game picks up the new remaps before the first click.
@@ -160,26 +158,23 @@ AxeThrowLoop() {
 HoldToScroll(button, direction) {
     ; Two modes — pick one in source, save+rerun. #SingleInstance Force
     ; means re-launching the .ahk just hot-swaps the running copy.
-    ;   "smooth": per-level table below. Tight cadence with chunk=1 at low
-    ;             levels feels much smoother than chunky bursts at chunk>1.
-    ;             At L3 we hit Sleep's ~15ms floor, so chunk doubles instead.
-    ;   "step":   2 notches per 150ms (~13/sec) — page-style chunks.
+    ;   "smooth": L0..L2 halve interval (60→30→15ms) at chunk 1; L3+ stays at
+    ;             the 15ms Sleep floor and doubles chunk (2, 4, 8, ...).
+    ;             Unbounded — Astra wants to go fast.
+    ;   "step":   2 notches per 150ms (~13/sec), chunk doubles per level.
     ;
     ; Fractional-delta smooth scrolling (mouse_event with delta < 120) was
     ; tried; works in Chromium-family apps but Windows Terminal, Firefox, and
     ; Notepad++ silently drop sub-notch events. Whole notches it is.
     static mode := "smooth"
-    ; smooth-mode level table: L0..L3 → [intervalMs, chunkSize]
-    static smoothIntervals := [60, 30, 15, 15]
-    static smoothChunks    := [ 1,  1,  1,  2]
 
     global scrollBumpLevel, scrollBumpTicks
-    global scrollBumpLastRelease, scrollBumpLastButton, scrollBumpRestoreWindowMs
+    global scrollBumpLastRelease, scrollBumpRestoreWindowMs
 
-    ; Restore prior level if re-pressing the same button within the window;
-    ; otherwise start fresh at L0.
-    if !(button = scrollBumpLastButton
-            && (A_TickCount - scrollBumpLastRelease) < scrollBumpRestoreWindowMs) {
+    ; Restore prior level if any press lands within the restore window —
+    ; including switching to the opposite scroll button. Outside the window:
+    ; reset to L0.
+    if (A_TickCount - scrollBumpLastRelease) >= scrollBumpRestoreWindowMs {
         scrollBumpLevel := 0
         scrollBumpTicks := 0
     }
@@ -196,9 +191,15 @@ HoldToScroll(button, direction) {
 
         if mode = "smooth" {
             while IsHeld(button) && WinGetID("A") = initialHwnd {
-                idx := scrollBumpLevel + 1
-                Send("{" direction " " smoothChunks[idx] "}")
-                Sleep(smoothIntervals[idx])
+                if scrollBumpLevel < 3 {
+                    intervalMs := 60 // (2 ** scrollBumpLevel)
+                    chunkSize := 1
+                } else {
+                    intervalMs := 15
+                    chunkSize := 2 ** (scrollBumpLevel - 2)
+                }
+                Send("{" direction " " chunkSize "}")
+                Sleep(intervalMs)
             }
         } else {
             while IsHeld(button) && WinGetID("A") = initialHwnd {
@@ -210,20 +211,17 @@ HoldToScroll(button, direction) {
     }
 
     ; Record release for the restore-window check on next press. Don't reset
-    ; level/ticks — they're remembered.
+    ; level/ticks — they're remembered (across direction switches too).
     scrollBumpLastRelease := A_TickCount
-    scrollBumpLastButton := button
 }
 
 ScrollBumpOrPassthrough(heldButton, wheelKey) {
-    global scrollBumpLevel, scrollBumpMax, scrollBumpTicks, scrollBumpTicksPerLevel
+    global scrollBumpLevel, scrollBumpTicks, scrollBumpTicksPerLevel
     if IsHeld(heldButton) {
-        if scrollBumpLevel < scrollBumpMax {
-            scrollBumpTicks++
-            if scrollBumpTicks >= scrollBumpTicksPerLevel {
-                scrollBumpLevel++
-                scrollBumpTicks := 0
-            }
+        scrollBumpTicks++
+        if scrollBumpTicks >= scrollBumpTicksPerLevel {
+            scrollBumpLevel++
+            scrollBumpTicks := 0
         }
         return
     }

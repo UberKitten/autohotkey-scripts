@@ -27,19 +27,19 @@ local M = {}
 local BTN_DOWN = 3
 local BTN_UP   = 4
 
--- Per-level cadence. Index = bumpLevel + 1; values are
--- {intervalSeconds, lines}. L0 was bumped 3x faster than the original
--- AHK-ish baseline; later levels stay monotonic so wheel bumps still
--- accelerate instead of accidentally slowing the scroll.
-local LEVELS = {
-    {0.020, 1},  -- L0: ~50 lines/sec
-    {0.015, 1},  -- L1: ~67 lines/sec  (close to timer floor)
-    {0.015, 2},  -- L2: ~133 lines/sec
-    {0.015, 3},  -- L3: ~200 lines/sec
-}
-local MAX_LEVEL = #LEVELS - 1
+-- Per-level cadence. L0 has a slightly slower interval; from L1 onward we
+-- run at the timer floor and grow chunk by 1 per level. No cap — gotta go
+-- fast — though apps will eventually saturate.
+local L0_INTERVAL_SEC = 0.020   -- ~50 lines/sec at L0
+local FAST_INTERVAL_SEC = 0.015 -- L1+: ~67 * lvl lines/sec
+local function levelParams(lvl)
+    if lvl == 0 then return L0_INTERVAL_SEC, 1 end
+    return FAST_INTERVAL_SEC, lvl
+end
+
 local TICKS_PER_LEVEL = 3       -- wheel ticks needed to advance one level
-local RESTORE_WINDOW_SEC = 2.0  -- re-pressing same button within this keeps level
+local RESTORE_WINDOW_SEC = 5.0  -- press within this window keeps the level
+                                -- (any direction)
 
 -- Hammerspoon delivers scroll events we post back through this same eventtap.
 -- Mark synthetic ticks so wheelTap passes them through; otherwise they look
@@ -54,7 +54,6 @@ local bumpTicks        = 0
 local scrollTimer      = nil
 local initialWindowId  = nil
 local lastReleaseTime  = 0    -- hs.timer.secondsSinceEpoch() of last release
-local lastReleaseBtn   = nil  -- which button was last released
 
 local props = hs.eventtap.event.properties
 local types = hs.eventtap.event.types
@@ -81,7 +80,6 @@ local function stopScroll()
     -- reset bumpLevel/bumpTicks — they're remembered.
     if heldButton ~= nil then
         lastReleaseTime = hs.timer.secondsSinceEpoch()
-        lastReleaseBtn  = heldButton
     end
     heldButton      = nil
     heldDirection   = 0
@@ -93,9 +91,9 @@ local function scrollTick()
         stopScroll()
         return
     end
-    local lvl = LEVELS[bumpLevel + 1]
-    postScroll(heldDirection, lvl[2])
-    scrollTimer = hs.timer.doAfter(lvl[1], scrollTick)
+    local interval, chunk = levelParams(bumpLevel)
+    postScroll(heldDirection, chunk)
+    scrollTimer = hs.timer.doAfter(interval, scrollTick)
 end
 
 local function startScroll(button, direction)
@@ -103,10 +101,10 @@ local function startScroll(button, direction)
         scrollTimer:stop()
         scrollTimer = nil
     end
-    -- Restore prior level if re-pressing the same button within the window;
-    -- otherwise start fresh at L0.
-    local now = hs.timer.secondsSinceEpoch()
-    if button ~= lastReleaseBtn or (now - lastReleaseTime) >= RESTORE_WINDOW_SEC then
+    -- Restore prior level if any press lands within the restore window —
+    -- including switching to the opposite scroll button. Outside the
+    -- window: reset to L0.
+    if (hs.timer.secondsSinceEpoch() - lastReleaseTime) >= RESTORE_WINDOW_SEC then
         bumpLevel = 0
         bumpTicks = 0
     end
@@ -153,12 +151,10 @@ M.wheelTap = hs.eventtap.new(
         local wheelDirection = (dy > 0) and 1 or -1
         if wheelDirection ~= heldDirection then return false end
 
-        if bumpLevel < MAX_LEVEL then
-            bumpTicks = bumpTicks + 1
-            if bumpTicks >= TICKS_PER_LEVEL then
-                bumpLevel = bumpLevel + 1
-                bumpTicks = 0
-            end
+        bumpTicks = bumpTicks + 1
+        if bumpTicks >= TICKS_PER_LEVEL then
+            bumpLevel = bumpLevel + 1
+            bumpTicks = 0
         end
         return true  -- suppress: this tick was consumed by the bump counter
     end
