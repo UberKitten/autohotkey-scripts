@@ -1,5 +1,5 @@
 ; NumLock Guard: keeps NumLock on by default, but gracefully lets you turn
-; it off for a bit. If you disable NumLock, you get 60 seconds of idle
+; it off for a bit. If you disable NumLock, you get 30 minutes of idle
 ; numpad time before it's automatically re-enabled. Any numpad keypress
 ; resets that idle timer, so you can use arrow-keys-on-numpad as long as
 ; you want — NumLock only comes back when you stop using the numpad.
@@ -22,7 +22,7 @@ CheckNumLock() {
     isOn := GetKeyState("NumLock", "T")
 
     if wasOn && !isOn {
-        ; NumLock just turned off — start the 60s re-enable countdown
+        ; NumLock just turned off — start the 30m re-enable countdown
         global numpadLastPress := A_TickCount
         SetTimer(ReEnableNumLock, 1000)
     } else if !wasOn && isOn {
@@ -38,7 +38,7 @@ ReEnableNumLock() {
         SetTimer(ReEnableNumLock, 0)
         return
     }
-    if (A_TickCount - numpadLastPress) >= 60000 {
+    if (A_TickCount - numpadLastPress) >= 1800000 {
         SetNumLockState("On")
         SetTimer(ReEnableNumLock, 0)
     }
