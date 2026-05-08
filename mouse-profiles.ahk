@@ -22,10 +22,15 @@ global currentProfile := "desktop"
 ; Scroll-bump level — bumped by wheel ticks while a scroll button is held.
 ; Each level doubles chunkSize. ticksPerLevel sets how many wheel ticks it
 ; takes to advance one level (deliberate ramp-up vs. one tick = liftoff).
+; The level persists for restoreWindowMs after release, so quick re-presses
+; pick up where you left off instead of starting over at L0.
 global scrollBumpLevel := 0
 global scrollBumpMax := 3
 global scrollBumpTicks := 0
 global scrollBumpTicksPerLevel := 3
+global scrollBumpLastRelease := 0
+global scrollBumpLastButton := ""
+global scrollBumpRestoreWindowMs := 2000
 
 ; Re-evaluate the active profile periodically. 500ms is fast enough that
 ; alt-tabbing into a game picks up the new remaps before the first click.
@@ -169,8 +174,15 @@ HoldToScroll(button, direction) {
     static smoothChunks    := [ 1,  1,  1,  2]
 
     global scrollBumpLevel, scrollBumpTicks
-    scrollBumpLevel := 0
-    scrollBumpTicks := 0
+    global scrollBumpLastRelease, scrollBumpLastButton, scrollBumpRestoreWindowMs
+
+    ; Restore prior level if re-pressing the same button within the window;
+    ; otherwise start fresh at L0.
+    if !(button = scrollBumpLastButton
+            && (A_TickCount - scrollBumpLastRelease) < scrollBumpRestoreWindowMs) {
+        scrollBumpLevel := 0
+        scrollBumpTicks := 0
+    }
 
     ; Wrapped in try/catch: AHK can throw during secure-desktop transitions
     ; (UAC consent prompt), lock screen, or other states where input/window
@@ -197,8 +209,10 @@ HoldToScroll(button, direction) {
     } catch {
     }
 
-    scrollBumpLevel := 0
-    scrollBumpTicks := 0
+    ; Record release for the restore-window check on next press. Don't reset
+    ; level/ticks — they're remembered.
+    scrollBumpLastRelease := A_TickCount
+    scrollBumpLastButton := button
 }
 
 ScrollBumpOrPassthrough(heldButton, wheelKey) {

@@ -38,7 +38,8 @@ local LEVELS = {
     {0.015, 3},  -- L3: ~200 lines/sec
 }
 local MAX_LEVEL = #LEVELS - 1
-local TICKS_PER_LEVEL = 3  -- wheel ticks needed to advance one level
+local TICKS_PER_LEVEL = 3       -- wheel ticks needed to advance one level
+local RESTORE_WINDOW_SEC = 2.0  -- re-pressing same button within this keeps level
 
 -- Hammerspoon delivers scroll events we post back through this same eventtap.
 -- Mark synthetic ticks so wheelTap passes them through; otherwise they look
@@ -46,12 +47,14 @@ local TICKS_PER_LEVEL = 3  -- wheel ticks needed to advance one level
 local SYNTHETIC_SCROLL_MARKER = 7331
 
 -- runtime state
-local heldButton      = nil  -- 3, 4, or nil
-local heldDirection   = 0    -- -1 (down) or +1 (up), 0 when idle
-local bumpLevel       = 0
-local bumpTicks       = 0
-local scrollTimer     = nil
-local initialWindowId = nil
+local heldButton       = nil  -- 3, 4, or nil
+local heldDirection    = 0    -- -1 (down) or +1 (up), 0 when idle
+local bumpLevel        = 0
+local bumpTicks        = 0
+local scrollTimer      = nil
+local initialWindowId  = nil
+local lastReleaseTime  = 0    -- hs.timer.secondsSinceEpoch() of last release
+local lastReleaseBtn   = nil  -- which button was last released
 
 local props = hs.eventtap.event.properties
 local types = hs.eventtap.event.types
@@ -74,10 +77,14 @@ local function stopScroll()
         scrollTimer:stop()
         scrollTimer = nil
     end
+    -- Record release for the restore-window check on next press. Don't
+    -- reset bumpLevel/bumpTicks — they're remembered.
+    if heldButton ~= nil then
+        lastReleaseTime = hs.timer.secondsSinceEpoch()
+        lastReleaseBtn  = heldButton
+    end
     heldButton      = nil
     heldDirection   = 0
-    bumpLevel       = 0
-    bumpTicks       = 0
     initialWindowId = nil
 end
 
@@ -92,7 +99,17 @@ local function scrollTick()
 end
 
 local function startScroll(button, direction)
-    stopScroll()
+    if scrollTimer then
+        scrollTimer:stop()
+        scrollTimer = nil
+    end
+    -- Restore prior level if re-pressing the same button within the window;
+    -- otherwise start fresh at L0.
+    local now = hs.timer.secondsSinceEpoch()
+    if button ~= lastReleaseBtn or (now - lastReleaseTime) >= RESTORE_WINDOW_SEC then
+        bumpLevel = 0
+        bumpTicks = 0
+    end
     heldButton      = button
     heldDirection   = direction
     initialWindowId = focusedWindowId()
