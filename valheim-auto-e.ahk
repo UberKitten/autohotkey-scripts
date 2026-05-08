@@ -8,15 +8,13 @@
 
 #HotIf WinActive("Valheim")
 $e:: {
-    ; If E is still held 100ms later, they're holding — spam E until release.
-    ; Otherwise they tapped it — send a single E.
-    if KeyWait("e", "T0.1") {
-        while GetKeyState("e", "P") {
-            Send("e")
-            Sleep(1)
-        }
-    } else {
+    ; Tap: single E (sent immediately). Hold: spam E until release.
+    Send("e")
+    if KeyWait("e", "T0.1")
+        return
+    while GetKeyState("e", "P") {
         Send("e")
+        Sleep(1)
     }
 }
 #HotIf
